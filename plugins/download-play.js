@@ -24,7 +24,7 @@ function fileSizeMB(filePath) {
   return b / (1024 * 1024);
 }
 
-// ==== APIs disponibles ====
+// ==== APIs individuales ====
 async function callSky(url) {
   const r = await axios.get(`${API_BASE}/api/download/yt.php`, {
     params: { url, format: "audio" },
@@ -33,7 +33,7 @@ async function callSky(url) {
   });
   if (!r.data || r.data.status !== "true" || !r.data.data)
     throw new Error("SKY sin datos");
-  return r.data.data.audio || r.data.data.video;
+  return { api: "SKY", url: r.data.data.audio || r.data.data.video };
 }
 
 async function callMayApi(url) {
@@ -42,26 +42,23 @@ async function callMayApi(url) {
     { timeout: 6000 }
   );
   if (!r.data || !r.data.result?.download?.url)
-    throw new Error("MayApi sin datos");
-  return r.data.result.download.url;
+    throw new Error("MayAPI sin datos");
+  return { api: "MayAPI", url: r.data.result.download.url };
 }
 
 // ==== Selección automática por velocidad ====
 async function fastApi(url) {
   const apis = [
-    { name: "SKY", fn: () => callSky(url) },
-    { name: "MayAPI", fn: () => callMayApi(url) },
+    () => callSky(url),
+    () => callMayApi(url),
   ];
 
-  const wrapped = apis.map(a =>
-    a.fn().then(r => ({ ok: true, api: a.name, url: r })).catch(() => null)
-  );
+  const wrapped = apis.map(fn => fn().catch(() => null));
+  const result = await Promise.any(wrapped);
 
-  const winner = await Promise.any(wrapped.filter(Boolean));
-  if (!winner?.ok || !winner.url)
-    throw new Error("Todas las APIs fallaron");
-  console.log(`✅ Usando API: ${winner.api}`);
-  return winner.url;
+  if (!result?.url) throw new Error("Todas las APIs fallaron");
+  console.log(`✅ Usando API: ${result.api}`);
+  return result;
 }
 
 // ==== COMANDO PRINCIPAL ====
@@ -85,6 +82,9 @@ const handler = async (msg, { conn, text }) => {
 
   const { url: videoUrl, title, author, timestamp: duration, thumbnail } = video;
 
+  // ⚡ Determinar qué API usar (más rápida)
+  const { api: usedApi, url: mediaUrl } = await fastApi(videoUrl);
+
   const caption = `
 > *𝙰𝚄𝙳𝙸𝙾 𝙳𝙾𝚆𝙽𝙻𝙾𝙰𝙳𝙴𝚁*
 
@@ -92,7 +92,7 @@ const handler = async (msg, { conn, text }) => {
 ⭒ ִֶָ७ ꯭🎤˙⋆｡ - *𝙰𝚛𝚝𝚒𝚜𝚝𝚊:* ${author?.name || "Desconocido"}
 ⭒ ִֶָ७ ꯭🕑˙⋆｡ - *𝙳𝚞𝚛𝚊𝚌𝚒ó𝚗:* ${duration}
 ⭒ ִֶָ७ ꯭📺˙⋆｡ - *𝙲𝚊𝚕𝚒𝚍𝚊𝚍:* 128kbps
-⭒ ִֶָ७ ꯭🌐˙⋆｡ - *𝙰𝚙𝚒:* *Auto (más rápida)*
+⭒ ִֶָ७ ꯭🌐˙⋆｡ - *𝙰𝚙𝚒:* ${usedApi}
 
 » *𝘌𝘕𝘝𝘐𝘈𝘕𝘋𝘖 𝘈𝘜𝘋𝘐𝘖* 🎧
 » *𝘈𝘎𝘜𝘈𝘙𝘋𝘌 𝘜𝘕 𝘗𝘖𝘊𝘖*...
@@ -102,21 +102,20 @@ const handler = async (msg, { conn, text }) => {
 > \`\`\`© 𝖯𝗈𝗐𝖾𝗋𝖾𝗱 𝖻𝗒 hernandez.𝗑𝗒𝗓\`\`\`
 `.trim();
 
+  // Enviar preview con info
   await conn.sendMessage(msg.key.remoteJid, { image: { url: thumbnail }, caption }, { quoted: msg });
 
-  await downloadAudio(conn, msg, videoUrl, title);
+  // Descargar y enviar audio
+  await downloadAudio(conn, msg, mediaUrl, title);
 
   await conn.sendMessage(msg.key.remoteJid, { react: { text: "✅", key: msg.key } });
 };
 
 // ==== DESCARGA DE AUDIO ====
-async function downloadAudio(conn, msg, videoUrl, title) {
+async function downloadAudio(conn, msg, mediaUrl, title) {
   const chatId = msg.key.remoteJid;
   const tmp = path.join(process.cwd(), "tmp");
   if (!fs.existsSync(tmp)) fs.mkdirSync(tmp, { recursive: true });
-
-  const mediaUrl = await fastApi(videoUrl);
-  if (!mediaUrl) throw new Error("No se pudo obtener audio");
 
   const urlPath = new URL(mediaUrl).pathname || "";
   const ext = (urlPath.split(".").pop() || "").toLowerCase();
