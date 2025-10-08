@@ -24,16 +24,44 @@ function fileSizeMB(filePath) {
   return b / (1024 * 1024);
 }
 
-async function callMyApi(url, format) {
+// ==== APIs disponibles ====
+async function callSky(url) {
   const r = await axios.get(`${API_BASE}/api/download/yt.php`, {
-    params: { url, format },
+    params: { url, format: "audio" },
     headers: { Authorization: `Bearer ${API_KEY}` },
     timeout: 6000
   });
-  if (!r.data || r.data.status !== "true" || !r.data.data) {
-    throw new Error("API inválida o sin datos");
-  }
-  return r.data.data;
+  if (!r.data || r.data.status !== "true" || !r.data.data)
+    throw new Error("SKY sin datos");
+  return r.data.data.audio || r.data.data.video;
+}
+
+async function callMayApi(url) {
+  const r = await axios.get(
+    `https://mayapi.ooguy.com/ytdl?url=${encodeURIComponent(url)}&type=mp3&quality=64&apikey=may-0595dca2`,
+    { timeout: 6000 }
+  );
+  if (!r.data || !r.data.result?.download?.url)
+    throw new Error("MayApi sin datos");
+  return r.data.result.download.url;
+}
+
+// ==== Selección automática por velocidad ====
+async function fastApi(url) {
+  const apis = [
+    { name: "SKY", fn: () => callSky(url) },
+    { name: "MayAPI", fn: () => callMayApi(url) },
+  ];
+
+  const wrapped = apis.map(a =>
+    a.fn().then(r => ({ ok: true, api: a.name, url: r })).catch(() => null)
+  );
+
+  const winner = await Promise.any(wrapped.filter(Boolean));
+  if (!winner?.ok || !winner.url)
+    throw new Error("Todas las APIs fallaron");
+  console.log(`✅ Usando API: ${winner.api}`);
+  return winner.url;
 }
 
 // ==== COMANDO PRINCIPAL ====
@@ -48,21 +76,15 @@ const handler = async (msg, { conn, text }) => {
     );
   }
 
-  // reacción de carga
-  await conn.sendMessage(msg.key.remoteJid, {
-    react: { text: "🕒", key: msg.key }
-  });
+  await conn.sendMessage(msg.key.remoteJid, { react: { text: "🕒", key: msg.key } });
 
-  // búsqueda
   const res = await yts(text);
   const video = res.videos?.[0];
-  if (!video) {
+  if (!video)
     return conn.sendMessage(msg.key.remoteJid, { text: "❌ Sin resultados." }, { quoted: msg });
-  }
 
-  const { url: videoUrl, title, author, timestamp: duration, views, thumbnail } = video;
+  const { url: videoUrl, title, author, timestamp: duration, thumbnail } = video;
 
-  // plantilla decorada ✨
   const caption = `
 > *𝙰𝚄𝙳𝙸𝙾 𝙳𝙾𝚆𝙽𝙻𝙾𝙰𝙳𝙴𝚁*
 
@@ -70,7 +92,7 @@ const handler = async (msg, { conn, text }) => {
 ⭒ ִֶָ७ ꯭🎤˙⋆｡ - *𝙰𝚛𝚝𝚒𝚜𝚝𝚊:* ${author?.name || "Desconocido"}
 ⭒ ִֶָ७ ꯭🕑˙⋆｡ - *𝙳𝚞𝚛𝚊𝚌𝚒ó𝚗:* ${duration}
 ⭒ ִֶָ७ ꯭📺˙⋆｡ - *𝙲𝚊𝚕𝚒𝚍𝚊𝚍:* 128kbps
-⭒ ִֶָ७ ꯭🌐˙⋆｡ - *𝙰𝚙𝚒:* sky
+⭒ ִֶָ७ ꯭🌐˙⋆｡ - *𝙰𝚙𝚒:* *Auto (más rápida)*
 
 » *𝘌𝘕𝘝𝘐𝘈𝘕𝘋𝘖 𝘈𝘜𝘋𝘐𝘖* 🎧
 » *𝘈𝘎𝘜𝘈𝘙𝘋𝘌 𝘜𝘕 𝘗𝘖𝘊𝘖*...
@@ -80,32 +102,21 @@ const handler = async (msg, { conn, text }) => {
 > \`\`\`© 𝖯𝗈𝗐𝖾𝗋𝖾𝗱 𝖻𝗒 hernandez.𝗑𝗒𝗓\`\`\`
 `.trim();
 
-  // envía preview con info
-  await conn.sendMessage(
-    msg.key.remoteJid,
-    { image: { url: thumbnail }, caption },
-    { quoted: msg }
-  );
+  await conn.sendMessage(msg.key.remoteJid, { image: { url: thumbnail }, caption }, { quoted: msg });
 
-  // descarga y envía el audio
   await downloadAudio(conn, msg, videoUrl, title);
 
-  // reacción final
-  await conn.sendMessage(msg.key.remoteJid, {
-    react: { text: "✅", key: msg.key }
-  });
+  await conn.sendMessage(msg.key.remoteJid, { react: { text: "✅", key: msg.key } });
 };
 
 // ==== DESCARGA DE AUDIO ====
 async function downloadAudio(conn, msg, videoUrl, title) {
   const chatId = msg.key.remoteJid;
-
-  const data = await callMyApi(videoUrl, "audio");
-  const mediaUrl = data.audio || data.video;
-  if (!mediaUrl) throw new Error("No se pudo obtener audio");
-
   const tmp = path.join(process.cwd(), "tmp");
   if (!fs.existsSync(tmp)) fs.mkdirSync(tmp, { recursive: true });
+
+  const mediaUrl = await fastApi(videoUrl);
+  if (!mediaUrl) throw new Error("No se pudo obtener audio");
 
   const urlPath = new URL(mediaUrl).pathname || "";
   const ext = (urlPath.split(".").pop() || "").toLowerCase();
@@ -137,7 +148,7 @@ async function downloadAudio(conn, msg, videoUrl, title) {
   const sizeMB = fileSizeMB(outFile);
   if (sizeMB > 99) {
     try { fs.unlinkSync(outFile); } catch {}
-    await conn.sendMessage(chatId, { text: `❌ El archivo de audio pesa ${sizeMB.toFixed(2)}MB (>99MB).` }, { quoted: msg });
+    await conn.sendMessage(chatId, { text: `❌ El archivo pesa ${sizeMB.toFixed(2)}MB (>99MB).` }, { quoted: msg });
     return;
   }
 
