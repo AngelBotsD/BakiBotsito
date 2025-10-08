@@ -28,7 +28,7 @@ async function callMyApi(url, format) {
   const r = await axios.get(`${API_BASE}/api/download/yt.php`, {
     params: { url, format },
     headers: { Authorization: `Bearer ${API_KEY}` },
-    timeout: 60000
+    timeout: 6000
   });
   if (!r.data || r.data.status !== "true" || !r.data.data) {
     throw new Error("API inválida o sin datos");
