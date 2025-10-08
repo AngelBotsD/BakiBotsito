@@ -14,6 +14,6 @@ return m.reply('✘ Ocurrió un error.')}}
 handler.help = ['join <link>']
 handler.tags = ['owner']
 handler.command = ['join', 'entrar'] 
-handler.mods = true;
+handler.mods = false;
 
 export default handler
