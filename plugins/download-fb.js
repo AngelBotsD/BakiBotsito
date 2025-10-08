@@ -1,90 +1,117 @@
-import axios from "axios"
-import fs from "fs"
-import path from "path"
+import fetch from "node-fetch";
+import yts from "yt-search";
 
-const handler = async (msg, { conn, args, command }) => {
-  const chatId = msg.key.remoteJid
-  const text = args.join(" ")
-  const pref = global.prefixes?.[0] || "."
+const APIS = [
+  {
+    name: "vreden",
+    url: (videoUrl) => `https://api.vreden.my.id/api/ytmp3?url=${encodeURIComponent(videoUrl)}&quality=64`,
+    extract: (data) => data?.result?.download?.url
+  },
+  {
+    name: "zenkey",
+    url: (videoUrl) => `https://api.zenkey.my.id/api/download/ytmp3?apikey=zenkey&url=${encodeURIComponent(videoUrl)}&quality=64`,
+    extract: (data) => data?.result?.download?.url
+  },
+  {
+    name: "yt1s",
+    url: (videoUrl) => `https://yt1s.io/api/ajaxSearch?q=${encodeURIComponent(videoUrl)}`,
+    extract: async (data) => {
+      const k = data?.links?.mp3?.auto?.k;
+      return k ? `https://yt1s.io/api/ajaxConvert?vid=${data.vid}&k=${k}&quality=64` : null;
+    }
+  }
+];
 
-  if (!text) {
-    return conn.sendMessage(chatId, {
-      text: `🔗 *𝙸𝚗𝚐𝚛𝚎𝚜𝚊 𝚄𝚗 𝙻𝚒𝚗𝚔 𝙳𝚎 𝙵𝚊𝚌𝚎𝚋𝚘𝚘𝚔*`,
-    }, { quoted: msg })
+const getAudioUrl = async (videoUrl) => {
+  let lastError = null;
+
+  for (const api of APIS) {
+    try {
+      console.log(`Probando API: ${api.name}`);
+      const apiUrl = api.url(videoUrl);
+      const response = await fetch(apiUrl, { timeout: 5000 });
+
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+      const data = await response.json();
+      const audioUrl = await api.extract(data);
+
+      if (audioUrl) {
+        console.log(`Éxito con API: ${api.name}`);
+        return audioUrl;
+      }
+    } catch (error) {
+      console.error(`Error con API ${api.name}:`, error.message);
+      lastError = error;
+      continue;
+    }
   }
 
-  if (!text.match(/(facebook\.com|fb\.watch)/gi)) {
-    return conn.sendMessage(chatId, {
-      text: `🚩 *𝙽𝚘 𝚜𝚎 𝚎𝚗𝚌𝚘𝚗𝚝𝚛𝚊𝚛𝚘𝚗 𝚛𝚎𝚜𝚞𝚕𝚝𝚊𝚍𝚘𝚜.*`,
-    }, { quoted: msg })
+  throw lastError || new Error("Todas las APIs fallaron");
+};
+
+let handler = async (m, { conn }) => {
+  const body = m.text?.trim();
+  if (!body) return;
+
+  if (!/^play|.play\s+/i.test(body)) return;
+
+  const query = body.replace(/^(play4|.play4)\s+/i, "").trim();
+  if (!query) {
+    throw `⭐ Escribe el nombre de la canción\n\nEjemplo: play Bad Bunny - Monaco`;
   }
 
   try {
-    await conn.sendMessage(chatId, {
-      react: { text: "🕒", key: msg.key }
-    })
+    await conn.sendMessage(m.chat, { react: { text: "🕒", key: m.key } });
 
-    const response = await axios.get(`https://api.dorratz.com/fbvideo?url=${encodeURIComponent(text)}`)
-    const results = response.data
+    const searchResults = await yts({ query, hl: 'es', gl: 'ES' });
+    const video = searchResults.videos[0];
+    if (!video) throw new Error("No se encontró el video");
 
-    if (!results || !results.length || !results[0].url) {
-      return conn.sendMessage(chatId, {
-        text: "🚫 *𝙽𝚘 𝚜𝚎 𝚙𝚞𝚍𝚘 𝙾𝚋𝚝𝚎𝚗𝚎𝚛 𝚎𝚕 𝚅𝚒𝚍𝚎𝚘.*"
-      }, { quoted: msg })
+    if (video.seconds > 600) {
+      throw "❌ El audio es muy largo (máximo 10 minutos)";
     }
 
-    const tmpDir = path.resolve("./tmp")
-    if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir)
+    // Enviar miniatura con título en negrita/cursiva y texto adicional
+    await conn.sendMessage(m.chat, {
+      image: { url: video.thumbnail },
+      caption: `*_${video.title}_*\n\n> 𝙱𝙰𝙺𝙸 - 𝙱𝙾𝚃 𝙳𝙴𝚂𝙲𝙰𝚁𝙶𝙰𝚂 💻`
+    }, { quoted: m });
 
-    const videoUrl = results[0].url
-    const filePath = path.join(tmpDir, `fb-${Date.now()}.mp4`)
-
-    const videoRes = await axios.get(videoUrl, { responseType: "stream" })
-    const writer = fs.createWriteStream(filePath)
-
-    await new Promise((resolve, reject) => {
-      videoRes.data.pipe(writer)
-      writer.on("finish", resolve)
-      writer.on("error", reject)
-    })
-
-    const stats = fs.statSync(filePath)
-    const sizeMB = stats.size / (1024 * 1024)
-    if (sizeMB > 500) {
-      fs.unlinkSync(filePath)
-      return conn.sendMessage(chatId, {
-        text: `⚠️ *El archivo pesa ${sizeMB.toFixed(2)}MB*\n\n🔒 Solo se permiten videos menores a 99MB.`,
-      }, { quoted: msg })
+    let audioUrl;
+    try {
+      audioUrl = await getAudioUrl(video.url);
+    } catch (e) {
+      console.error("Error al obtener audio:", e);
+      throw "⚠️ Error al procesar el audio. Intenta con otra canción";
     }
 
-    const caption = ``
+    await conn.sendMessage(m.chat, {
+      audio: { url: audioUrl },
+      mimetype: "audio/mpeg",
+      fileName: `${video.title.slice(0, 30)}.mp3`.replace(/[^\w\s.-]/gi, ''),
+      ptt: true
+    }, { quoted: m });
 
-    await conn.sendMessage(chatId, {
-      video: fs.readFileSync(filePath),
-      mimetype: "video/mp4",
-      caption
-    }, { quoted: msg })
+    await conn.sendMessage(m.chat, { react: { text: "✅", key: m.key } });
 
-    fs.unlinkSync(filePath)
+  } catch (error) {
+    console.error("Error:", error);
+    await conn.sendMessage(m.chat, { react: { text: "❌", key: m.key } });
 
-    await conn.sendMessage(chatId, {
-      react: { text: "✅", key: msg.key }
-    })
+    const errorMsg = typeof error === 'string' ? error : 
+      `❌ *Error:* ${error.message || 'Ocurrió un problema'}\n\n` +
+      `🔸 *Posibles soluciones:*\n` +
+      `• Verifica el nombre de la canción\n` +
+      `• Intenta con otro tema\n` +
+      `• Prueba más tarde`;
 
-  } catch (err) {
-    console.error("❌ Error en comando Facebook:", err)
-    await conn.sendMessage(chatId, {
-      text: "❌ *Ocurrió un error al procesar el video de Facebook.*"
-    }, { quoted: msg })
-
-    await conn.sendMessage(chatId, {
-      react: { text: "❌", key: msg.key }
-    })
+    await conn.sendMessage(m.chat, { text: errorMsg }, { quoted: m });
   }
-}
+};
 
-handler.command = ["facebook", "fb"]
-handler.help = ["facebook <url>", "fb <url>"]
-handler.tags = ["descargas"]
+handler.customPrefix = /^(play4|.play4)\s+/i;
+handler.command = new RegExp;
+handler.exp = 0;
 
-export default handler
+export default handler;
