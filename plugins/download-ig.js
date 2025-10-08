@@ -1,81 +1,131 @@
 import axios from "axios";
-import fs from "fs";
-import path from "path";
+import yts from "yt-search";
 
-const handler = async (msg, { conn, args, command }) => {
-  const chatId = msg.key.remoteJid;
-  const text = args.join(" ");
-  const pref = global.prefixes?.[0] || ".";
-
-  if (!text) {
-    return conn.sendMessage(chatId, {
-      text: `🔗 *𝙸𝚗𝚐𝚛𝚎𝚜𝚊 𝚞𝚗 𝚕𝚒𝚗𝚔 𝚍𝚎 𝙸𝚗𝚜𝚝𝚊𝚐𝚛𝚊𝚖*`
-    }, { quoted: msg });
+const handler = async (msg, { conn, text }) => {
+  if (!text || !text.trim()) {
+    return conn.sendMessage(
+      msg.key.remoteJid,
+      { text: "🎶 Ingresa el nombre de alguna canción" },
+      { quoted: msg }
+    );
   }
 
-  try {
-    await conn.sendMessage(chatId, {
-      react: { text: "🕒", key: msg.key }
-    });
+  await conn.sendMessage(msg.key.remoteJid, { react: { text: "🕒", key: msg.key } });
 
-    const apiUrl = `https://api.dorratz.com/igdl?url=${encodeURIComponent(text)}`;
-    const response = await axios.get(apiUrl);
-    const { data } = response.data;
+  const res = await yts({ query: text, hl: "es", gl: "MX" });
+  const song = res.videos[0];
+  if (!song) {
+    return conn.sendMessage(
+      msg.key.remoteJid,
+      { text: "❌ Sin resultados." },
+      { quoted: msg }
+    );
+  }
 
-    if (!data || data.length === 0) {
-      return conn.sendMessage(chatId, {
-        text: "❌ *No se pudo obtener el contenido de Instagram.*"
-      }, { quoted: msg });
-    }
+  const { url: videoUrl, title, timestamp: duration, author, thumbnail } = song;
+  const artista = author.name;
 
-    const caption = ``;
-
-    const tmpDir = path.resolve("./tmp");
-    if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir);
-
-    for (const item of data) {
-      const filePath = path.join(tmpDir, `ig-${Date.now()}-${Math.floor(Math.random() * 1000)}.mp4`);
-
-      const videoRes = await axios.get(item.url, { responseType: "stream" });
-      const writer = fs.createWriteStream(filePath);
-
-      await new Promise((resolve, reject) => {
-        videoRes.data.pipe(writer);
-        writer.on("finish", resolve);
-        writer.on("error", reject);
-      });
-
-      const stats = fs.statSync(filePath);
-      const sizeMB = stats.size / (1024 * 1024);
-
-      if (sizeMB > 99) {
-        fs.unlinkSync(filePath);
-        await conn.sendMessage(chatId, {
-          text: `❌ Un video pesa ${sizeMB.toFixed(2)}MB y excede el límite de 99MB.`
-        }, { quoted: msg });
-        continue;
+  const extractUrl = (data) => {
+    const search = (obj) => {
+      if (!obj) return null;
+      if (typeof obj === "string" && obj.includes("http")) {
+        if (/.(mp3|m4a|opus|webm)$/i.test(obj)) {
+          return obj;
+        }
       }
+      if (typeof obj === "object") {
+        for (const key in obj) {
+          const found = search(obj[key]);
+          if (found) return found;
+        }
+      }
+      return null;
+    };
+    return search(data);
+  };
 
-      await conn.sendMessage(chatId, {
-        video: fs.readFileSync(filePath),
-        mimetype: "video/mp4",
-        caption
-      }, { quoted: msg });
-
-      fs.unlinkSync(filePath);
+  const tryApi = async (apiName, urlBuilder) => {
+    try {
+      const r = await axios.get(urlBuilder(), { timeout: 6000 });
+      const audioUrl = extractUrl(r.data);
+      if (audioUrl) return { url: audioUrl, api: apiName };
+      throw new Error(`${apiName}: No entregó URL válido`);
+    } catch (err) {
+      throw new Error(`${apiName}: ${err.message}`);
     }
+  };
 
-    await conn.sendMessage(chatId, {
-      react: { text: "✅", key: msg.key }
-    });
+  // 🔥 Lista de APIs en competición
+  const apis = [
+    () => tryApi("Api 1M", () => `https://mayapi.ooguy.com/ytdl?url=${encodeURIComponent(videoUrl)}&type=mp3&quality=64&apikey=may-0595dca2`),
+    () => tryApi("Api 2A", () => `https://api-adonix.ultraplus.click/download/ytmp3?apikey=AdonixKeyz11c2f6197&url=${encodeURIComponent(videoUrl)}&quality=64`),
+    () => tryApi("Api 3F", () => `https://api-adonix.ultraplus.click/download/ytmp3?apikey=Adofreekey&url=${encodeURIComponent(videoUrl)}&quality=64`),
+    () => tryApi("Api 4MY", () => `https://api-adonix.ultraplus.click/download/ytmp3?apikey=SoyMaycol<3&url=${encodeURIComponent(videoUrl)}&quality=64`),
+    () => tryApi("Api 5K", () => `https://api-adonix.ultraplus.click/download/ytmp3?apikey=Angelkk122&url=${encodeURIComponent(videoUrl)}&quality=64`),
+    () => tryApi("Api 6Srv", () => `http://173.208.192.170/download/ytmp3?apikey=Adofreekey&url=${encodeURIComponent(videoUrl)}`)
+  ];
 
-  } catch (err) {
-    console.error("❌ Error en comando Instagram:", err);
-    await conn.sendMessage(chatId, {
-      text: "❌ *Ocurrió un error al procesar el enlace de Instagram.*"
-    }, { quoted: msg });
+  const tryDownload = async () => {
+    let lastError;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        return await Promise.any(apis.map(api => api()));
+      } catch (err) {
+        lastError = err;
+        if (attempt < 3) {
+          await conn.sendMessage(msg.key.remoteJid, { react: { text: "🔄", key: msg.key } });
+        }
+        if (attempt === 3) throw lastError;
+      }
+    }
+  };
+
+  try {
+    const winner = await tryDownload();
+    const audioDownloadUrl = winner.url;
+
+    await conn.sendMessage(  
+      msg.key.remoteJid,  
+      {  
+        image: { url: thumbnail },  
+        caption: `
+
+> *𝚅𝙸𝙳𝙴𝙾 𝙳𝙾𝚆𝙽𝙻𝙾𝙰𝙳𝙴𝚁*
+
+⭒ ִֶָ७ ꯭🎵˙⋆｡ - *𝚃𝚒́𝚝𝚞𝚕𝚘:* ${title}
+⭒ ִֶָ७ ꯭🎤˙⋆｡ - *𝙰𝚛𝚝𝚒𝚜𝚝𝚊:* ${artista}
+⭒ ִֶָ७ ꯭🕑˙⋆｡ - *𝙳𝚞𝚛𝚊𝚌𝚒ó𝚗:* ${duration}
+⭒ ִֶָ७ ꯭📺˙⋆｡ - *𝙲𝚊𝚕𝚒𝚍𝚊𝚍:* 128kbps
+⭒ ִֶָ७ ꯭🌐˙⋆｡ - *𝙰𝚙𝚒:* ${winner.api}
+
+» *𝘌𝘕𝘝𝘐𝘈𝘕𝘋𝘖 𝘈𝘜𝘋𝘐𝘖*  🎧
+» *𝘈𝘎𝘜𝘈𝘙𝘋𝘌 𝘜𝘕 𝘗𝘖𝘊𝘖*...
+
+⇆‌ ㅤ◁ㅤㅤ❚❚ㅤㅤ▷ㅤ↻
+
+> \`\`\`© 𝖯𝗈𝗐𝖾𝗋𝖾𝗱 𝖻𝗒 𝗁𝖾𝗋𝗇𝖺𝗇𝖽𝖾𝗓.𝗑𝗒𝗓\`\`\`
+`.trim()
+      },
+      { quoted: msg }
+    );
+
+    await conn.sendMessage(msg.key.remoteJid, {  
+      audio: { url: audioDownloadUrl },  
+      mimetype: "audio/mpeg",  
+      fileName: `${title.slice(0, 30)}.mp3`.replace(/[^\w\s.-]/gi, ''),  
+      ptt: false  
+    }, { quoted: msg });  
+
+    await conn.sendMessage(msg.key.remoteJid, { react: { text: "✅", key: msg.key } });
+
+  } catch (e) {
+    const errorMsg = typeof e === "string"
+      ? e
+      : `❌ *Error:* ${e.message || "Ocurrió un problema"}\n\n🔸 *Posibles soluciones:*\n• Verifica el nombre de la canción\n• Intenta con otro tema\n• Prueba más tarde`;
+
+    await conn.sendMessage(msg.key.remoteJid, { text: errorMsg }, { quoted: msg });
   }
 };
 
-handler.command = ["instagram", "ig"];
+handler.command = ["play3"];
 export default handler;
