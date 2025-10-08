@@ -71,7 +71,7 @@ const handler = async (msg, { conn, text }) => {
         })
 
         const mayApi = tryApi("MayAPI", q => `https://mayapi.ooguy.com/ytdl?url=${encodeURIComponent(videoUrl)}&type=mp4&quality=${q}&apikey=may-0595dca2`)
-        const neoxApi = tryApi("NeoxR", q => `https://api.neoxr.eu/api/youtube?url=${encodeURIComponent(videoUrl)}&type=video&quality=${q}&apikey=russellxz`)
+        const neoxApi = tryApi("NeoxR", q => `https://api-nv.eliasaryt.pro/api/youtube?url=${encodeURIComponent(videoUrl)}&type=video&quality=${q}&apikey=n0ZjEHvBRyOTYNOj`)
         const adonixApi = tryApi("AdonixAPI", q => `https://api-adonix.ultraplus.click/download/ytmp4?apikey=AdonixKeyz11c2f6197&url=${encodeURIComponent(videoUrl)}&quality=${q}`)
 
         winner = await Promise.any([mayApi, neoxApi, adonixApi])
