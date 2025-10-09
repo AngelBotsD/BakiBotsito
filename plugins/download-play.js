@@ -9,11 +9,34 @@ import { pipeline } from "stream"
 const streamPipe = promisify(pipeline)
 const API_BASE = process.env.API_BASE || "https://api-sky.ultraplus.click"
 const API_KEY = process.env.API_KEY || "Russellxz"
+const searchCache = new Map()
 
-async function downloadToFile(url, filePath) {
-  const res = await axios.get(url, { responseType: "stream" })
-  await streamPipe(res.data, fs.createWriteStream(filePath))
-  return filePath
+function log(tag, msg) {
+  if (process.env.DEBUG) console.log(`[${tag}] ${msg}`)
+}
+
+function cleanTmp(dir, maxAgeMinutes = 10) {
+  if (!fs.existsSync(dir)) return
+  fs.readdirSync(dir).forEach(file => {
+    const full = path.join(dir, file)
+    const age = (Date.now() - fs.statSync(full).mtimeMs) / 60000
+    if (age > maxAgeMinutes) fs.unlinkSync(full)
+  })
+}
+
+async function downloadToFile(url, filePath, retries = 2) {
+  try {
+    const res = await axios.get(url, { 
+      responseType: "stream",
+      headers: { "User-Agent": "Mozilla/5.0" },
+      timeout: 15000
+    })
+    await streamPipe(res.data, fs.createWriteStream(filePath))
+    return filePath
+  } catch (err) {
+    if (retries > 0) return await downloadToFile(url, filePath, retries - 1)
+    throw new Error("Fallo al descargar archivo: " + err.message)
+  }
 }
 
 function fileSizeMB(filePath) {
@@ -42,21 +65,34 @@ async function callAdonix(url) {
 async function fastApi(videoUrl, conn, msg, intento = 1) {
   try {
     const tasks = [callSky(videoUrl), callAdonix(videoUrl)]
-    const result = await Promise.any(tasks.map(p => p.catch(e => { throw e })))
-    return result
-  } catch {
+    const results = await Promise.allSettled(tasks)
+    const success = results.find(r => r.status === "fulfilled")
+    if (success) return success.value
+
     if (intento === 1) {
       await conn.sendMessage(msg.key.remoteJid, { react: { text: "🔁", key: msg.key } })
       return await fastApi(videoUrl, conn, msg, 2)
     }
+
     throw new Error("Todas las APIs fallaron incluso en reintento.")
+  } catch (err) {
+    throw err
   }
+}
+
+async function getVideoData(query) {
+  if (searchCache.has(query)) return searchCache.get(query)
+  const res = await yts(query)
+  const video = res.videos?.[0]
+  if (video) searchCache.set(query, video)
+  return video
 }
 
 async function downloadAudioFile(conn, msg, mediaUrl, title, bitrate) {
   const chatId = msg.key.remoteJid
   const tmp = path.join(process.cwd(), "tmp")
   if (!fs.existsSync(tmp)) fs.mkdirSync(tmp, { recursive: true })
+  cleanTmp(tmp)
 
   const ext = (new URL(mediaUrl).pathname.split(".").pop() || "").toLowerCase()
   const isMp3 = ext === "mp3"
@@ -72,9 +108,10 @@ async function downloadAudioFile(conn, msg, mediaUrl, title, bitrate) {
           .audioCodec("libmp3lame")
           .audioBitrate(`${bitrate}k`)
           .format("mp3")
-          .save(tryOut)
+          .outputOptions("-y")
           .on("end", resolve)
           .on("error", reject)
+          .save(tryOut)
       )
       outFile = tryOut
       try { fs.unlinkSync(inFile) } catch {}
@@ -105,9 +142,7 @@ const handler = async (msg, { conn, text }) => {
 
   await conn.sendMessage(chatId, { react: { text: "🕒", key: msg.key } })
 
-  const searchPromise = yts(text)
-  const searchResult = await searchPromise
-  const video = searchResult.videos?.[0]
+  const video = await getVideoData(text)
   if (!video) return conn.sendMessage(chatId, { text: "❌ Sin resultados." }, { quoted: msg })
 
   const { url: videoUrl, title, author, timestamp: duration, thumbnail } = video
@@ -123,12 +158,12 @@ const handler = async (msg, { conn, text }) => {
 
   await conn.sendMessage(chatId, { image: { url: thumbnail }, caption }, { quoted: msg })
 
-  const apiPromise = fastApi(videoUrl, conn, msg)
-
-  apiPromise.then(async result => {
+  fastApi(videoUrl, conn, msg).then(async result => {
+    log("API", `Usando ${result.api} para ${title}`)
     const mediaUrl = result.data.audio || result.data.video
     const bitrate = result.bitrate || 64
     if (!mediaUrl) throw new Error("No se obtuvo un enlace válido.")
+    await conn.sendMessage(chatId, { react: { text: "⬇️", key: msg.key } })
     await downloadAudioFile(conn, msg, mediaUrl, title, bitrate)
     await conn.sendMessage(chatId, { react: { text: "✅", key: msg.key } })
   }).catch(async err => {
@@ -140,4 +175,5 @@ const handler = async (msg, { conn, text }) => {
 handler.command = ["play", "audio"]
 handler.help = ["play <término>", "audio <nombre>"]
 handler.tags = ["descargas"]
+
 export default handler
