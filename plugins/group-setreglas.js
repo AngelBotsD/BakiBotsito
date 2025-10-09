@@ -10,7 +10,6 @@ conn.reply(m.chat, `𝙍𝙀𝙂𝙇𝘼𝙎 𝘼𝘾𝙏𝙐𝘼𝙇𝙄𝙕�
 handler.help = ['setreglas + Texto']
 handler.tags = ['group']
 handler.command = ['setreglas', 'nuevasreglas'] 
-handler.botAdmin = true
 handler.admin = true
 handler.group = true
 export default handler
