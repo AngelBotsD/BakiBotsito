@@ -25,7 +25,7 @@ async function callSky(url) {
   const r = await axios.get(`${API_BASE}/api/download/yt.php`, {
     params: { url, format: "audio" },
     headers: { Authorization: `Bearer ${API_KEY}` },
-    timeout: 6000
+    timeout: 9000
   })
   if (!r.data || r.data.status !== "true" || !r.data.data)
     throw new Error("API SKY inválida")
@@ -34,7 +34,7 @@ async function callSky(url) {
 
 async function callMayApi(url) {
   const apiUrl = `https://mayapi.ooguy.com/ytdl?url=${encodeURIComponent(url)}&type=mp3&quality=64&apikey=may-0595dca2`
-  const r = await axios.get(apiUrl, { timeout: 6000 })
+  const r = await axios.get(apiUrl, { timeout: 9000 })
   if (!r.data || !r.data.status || !r.data.result)
     throw new Error("API MayAPI inválida")
   return { api: "Multi API", data: { audio: r.data.result.url }, bitrate: 64 }
@@ -42,7 +42,7 @@ async function callMayApi(url) {
 
 async function callAdonix(url) {
   const apiUrl = `https://api-adonix.ultraplus.click/download/ytmp3?apikey=SoyMaycol<3&url=${encodeURIComponent(url)}&quality=64`
-  const r = await axios.get(apiUrl, { timeout: 6000 })
+  const r = await axios.get(apiUrl, { timeout: 9000 })
   if (!r.data || !r.data.result || !r.data.result.url)
     throw new Error("API Adonix inválida")
   return { api: "Multi API", data: { audio: r.data.result.url }, bitrate: 64 }
@@ -139,7 +139,7 @@ const handler = async (msg, { conn, text }) => {
     } catch (err) {
       lastError = err
       attempt++
-      if (attempt < 2) await new Promise(r => setTimeout(r, 1500))
+      if (attempt < 2) await new Promise(r => setTimeout(r, 9000))
     }
   }
 
