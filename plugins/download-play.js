@@ -95,7 +95,7 @@ async function downloadAudioFile(conn, msg, mediaUrl, title) {
   try { fs.unlinkSync(outFile); } catch {}
 }
 
-async function handleDownload(conn, msg, videoUrl, title, author, duration, thumbnail) {
+async function handleDownload(conn, msg, videoUrl, title) {
   const chatId = msg.key.remoteJid;
   let attempt = 0;
   let success = false;
@@ -120,25 +120,6 @@ async function handleDownload(conn, msg, videoUrl, title, author, duration, thum
       if (attempt < 2) await new Promise(r => setTimeout(r, 1500));
     }
   }
-
-  const caption = `
-> *𝙰𝚄𝙳𝙸𝙾 𝙳𝙾𝚆𝙽𝙻𝙾𝙰𝙳𝙴𝚁*
-
-⭒ ִֶָ७ ꯭🎵˙⋆｡ - *𝚃𝚒́𝚝𝚞𝚕𝚘:* ${title}
-⭒ ִֶָ७ ꯭🎤˙⋆｡ - *𝙰𝚛𝚝𝚒𝚜𝚝𝚊:* ${author?.name || "Desconocido"}
-⭒ ִֶָ७ ꯭🕑˙⋆｡ - *𝙳𝚞𝚛𝚊𝚌𝚒ó𝚗:* ${duration}
-⭒ ִֶָ७ ꯭📺˙⋆｡ - *𝙲𝚊𝚕𝚒𝚍𝚊𝚍:* 128kbps
-⭒ ִֶָ७ ꯭🌐˙⋆｡ - *𝙰𝚙𝚒:* ${apiUsed}
-
-» *𝘌𝘕𝘝𝘐𝘈𝘕𝘋𝘖 𝘈𝘜𝘋𝘐𝘖* 🎧
-» *𝘈𝘎𝘜𝘈𝘙𝘋𝘓𝘌 𝘜𝘕 𝘗𝘖𝘊𝘖*...
-
-⇆‌ ㅤ◁ㅤㅤ❚❚ㅤㅤ▷ㅤ↻
-
-> \`\`\`© 𝖯𝗈𝗐𝖾𝗋𝖾𝗱 𝖻𝗒 hernandez.𝗑𝗒𝗓\`\`\`
-`.trim();
-
-  await conn.sendMessage(chatId, { image: { url: thumbnail }, caption }, { quoted: msg });
 
   if (success && mediaUrl) {
     await downloadAudioFile(conn, msg, mediaUrl, title);
@@ -165,7 +146,21 @@ const handler = async (msg, { conn, text }) => {
 
   const { url: videoUrl, title, author, timestamp: duration, thumbnail } = video;
 
-  await handleDownload(conn, msg, videoUrl, title, author, duration, thumbnail);
+  // Envía la info al instante
+  const caption = `
+> *𝙰𝚄𝙳𝙸𝙾 𝙳𝙾𝚆𝙽𝙻𝙾𝙰𝙳𝙴𝚁*
+
+⭒ ִֶָ७ ꯭🎵˙⋆｡ - *𝚃𝚒́𝚝𝚞𝚕𝚘:* ${title}
+⭒ ִֶָ७ ꯭🎤˙⋆｡ - *𝙰𝚛𝚝𝚒𝚜𝚝𝚊:* ${author?.name || "Desconocido"}
+⭒ ִֶָ७ ꯭🕑˙⋆｡ - *𝙳𝚞𝚛𝚊𝚌𝚒ó𝚗:* ${duration}
+⭒ ִֶָ७ ꯭📺˙⋆｡ - *𝙲𝚊𝚕𝚒𝚍𝚊𝚍:* 128kbps
+⭒ ִֶָ७ ꯭🌐˙⋆｡ - *𝙰𝚙𝚒:* cargando...
+`.trim();
+
+  await conn.sendMessage(msg.key.remoteJid, { image: { url: thumbnail }, caption }, { quoted: msg });
+
+  // Descarga el audio en segundo plano
+  handleDownload(conn, msg, videoUrl, title).catch(console.error);
 };
 
 handler.command = ["play", "audio"];
