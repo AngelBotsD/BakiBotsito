@@ -65,6 +65,7 @@ async function downloadAudioFile(conn, msg, mediaUrl, title, bitrate) {
   await downloadToFile(mediaUrl, inFile)
 
   let outFile = inFile
+  // Solo convertir si NO es MP3
   if (!isMp3) {
     const tryOut = path.join(tmp, `${Date.now()}_out.mp3`)
     await new Promise((resolve, reject) =>
