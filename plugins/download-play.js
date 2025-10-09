@@ -38,9 +38,9 @@ async function callMayApi(url) {
   return { api: "MayAPI", data: { audio: r.data.result.url } };
 }
 
-async function callAdonix(videoUrl) {
-  const url = `https://api-adonix.ultraplus.click/download/ytmp3?apikey=SoyMaycol<3&url=${encodeURIComponent(videoUrl)}&quality=128`;
-  const r = await axios.get(url, { timeout: 6000 });
+async function callAdonix(url) {
+  const apiUrl = `https://api-adonix.ultraplus.click/download/ytmp3?apikey=SoyMaycol<3&url=${encodeURIComponent(url)}&quality=128`;
+  const r = await axios.get(apiUrl, { timeout: 6000 });
   if (!r.data || !r.data.result || !r.data.result.url) throw new Error("API Adonix inválida");
   return { api: "Adonix", data: { audio: r.data.result.url } };
 }
@@ -98,41 +98,6 @@ async function downloadAudioFile(conn, msg, mediaUrl, title) {
   try { fs.unlinkSync(outFile); } catch {}
 }
 
-async function handleDownload(conn, msg, videoUrl, title) {
-  const chatId = msg.key.remoteJid;
-  let attempt = 0;
-  let success = false;
-  let lastError = null;
-  let apiUsed = "Desconocida";
-  let mediaUrl = null;
-
-  while (attempt < 2 && !success) {
-    try {
-      if (attempt === 1)
-        await conn.sendMessage(chatId, { react: { text: "🔁", key: msg.key } });
-
-      const result = await fastApi(videoUrl);
-      apiUsed = result.api;
-      mediaUrl = result.data.audio || result.data.video;
-      if (!mediaUrl) throw new Error("No se pudo obtener audio");
-
-      success = true;
-    } catch (err) {
-      lastError = err;
-      attempt++;
-      if (attempt < 2) await new Promise(r => setTimeout(r, 1500));
-    }
-  }
-
-  if (success && mediaUrl) {
-    await downloadAudioFile(conn, msg, mediaUrl, title);
-    await conn.sendMessage(chatId, { react: { text: "✅", key: msg.key } });
-  } else {
-    await conn.sendMessage(chatId, { react: { text: "❌", key: msg.key } });
-    await conn.sendMessage(chatId, { text: `❌ No se pudo descargar el audio.\nError: ${lastError?.message || "Desconocido"}` }, { quoted: msg });
-  }
-}
-
 const handler = async (msg, { conn, text }) => {
   const pref = global.prefixes?.[0] || ".";
   if (!text || !text.trim()) {
@@ -161,7 +126,20 @@ const handler = async (msg, { conn, text }) => {
 
   await conn.sendMessage(msg.key.remoteJid, { image: { url: thumbnail }, caption }, { quoted: msg });
 
-  handleDownload(conn, msg, videoUrl, title).catch(console.error);
+  let apiUsed = "Desconocida";
+  let mediaUrl = null;
+
+  try {
+    const result = await fastApi(videoUrl);
+    apiUsed = result.api;
+    mediaUrl = result.data.audio || result.data.video;
+    await downloadAudioFile(conn, msg, mediaUrl, title);
+    await conn.sendMessage(msg.key.remoteJid, { react: { text: "✅", key: msg.key } });
+    await conn.sendMessage(msg.key.remoteJid, { text: `🌐 API usada: ${apiUsed}` });
+  } catch (err) {
+    await conn.sendMessage(msg.key.remoteJid, { react: { text: "🔁", key: msg.key } });
+    await conn.sendMessage(msg.key.remoteJid, { text: `❌ No se pudo descargar el audio.\nError: ${err?.message || "Desconocido"}` }, { quoted: msg });
+  }
 };
 
 handler.command = ["play", "audio"];
