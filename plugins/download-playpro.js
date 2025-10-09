@@ -1,58 +1,110 @@
-import axios from "axios";
-import yts from "yt-search";
-import fs from "fs";
-import path from "path";
-import ffmpeg from "fluent-ffmpeg";
-import { promisify } from "util";
-import { pipeline } from "stream";
+import axios from "axios"
+import yts from "yt-search"
+import fs from "fs"
+import path from "path"
+import ffmpeg from "fluent-ffmpeg"
+import { promisify } from "util"
+import { pipeline } from "stream"
 
-const streamPipe = promisify(pipeline);
+const streamPipe = promisify(pipeline)
 
 // ==== CONFIG DE TU API ====
-const API_BASE = process.env.API_BASE || "https://api-sky.ultraplus.click";
-const API_KEY  = process.env.API_KEY  || "Russellxz"; // <-- tu API Key
-
-const pending = {};
+const API_BASE = process.env.API_BASE || "https://api-sky.ultraplus.click"
+const API_KEY  = process.env.API_KEY  || "Russellxz"
 
 async function downloadToFile(url, filePath) {
-  const res = await axios.get(url, { responseType: "stream" });
-  await streamPipe(res.data, fs.createWriteStream(filePath));
-  return filePath;
+  const res = await axios.get(url, { responseType: "stream", timeout: 5000 })
+  await streamPipe(res.data, fs.createWriteStream(filePath))
+  return filePath
 }
 
 function fileSizeMB(filePath) {
-  return fs.statSync(filePath).size / (1024 * 1024);
+  return fs.statSync(filePath).size / (1024 * 1024)
 }
 
-async function callMyApi(url) {
+async function callSky(url) {
   const r = await axios.get(`${API_BASE}/api/download/yt.php`, {
     params: { url, format: "audio" },
     headers: { Authorization: `Bearer ${API_KEY}` },
-    timeout: 60000
-  });
-  if (!r.data?.status || !r.data.data) throw new Error("API inválida o sin datos");
-  return r.data.data;
+    timeout: 5000
+  })
+  if (!r.data?.status || !r.data.data) throw new Error("API SKY inválida")
+  return { api: "SKY", url: r.data.data.audio || r.data.data.video, bitrate: 128 }
+}
+
+async function callMyApi(url) {
+  const r = await axios.get(`https://mayapi.ooguy.com/ytdl?url=${encodeURIComponent(url)}&type=mp3&quality=64&apikey=may-0595dca2`, { timeout: 5000 })
+  if (!r.data?.status || !r.data.result) throw new Error("API MayAPI inválida")
+  return { api: "Multi API", url: r.data.result.url, bitrate: 64 }
+}
+
+async function fastApi(videoUrl) {
+  const tasks = [callSky(videoUrl), callMyApi(videoUrl)]
+  return await Promise.any(tasks)
+}
+
+async function downloadAudioFile(conn, msg, mediaUrl, title, bitrate) {
+  const chatId = msg.key.remoteJid
+  const tmp = path.join(process.cwd(), "tmp")
+  if (!fs.existsSync(tmp)) fs.mkdirSync(tmp, { recursive: true })
+
+  const urlPath = new URL(mediaUrl).pathname || ""
+  const ext = (urlPath.split(".").pop() || "").toLowerCase()
+  const inFile = path.join(tmp, `${Date.now()}_in.${ext || "bin"}`)
+  await downloadToFile(mediaUrl, inFile)
+
+  let outFile = inFile
+  if (ext !== "mp3") {
+    const tryOut = path.join(tmp, `${Date.now()}_out.mp3`)
+    try {
+      await new Promise((resolve, reject) =>
+        ffmpeg(inFile)
+          .audioCodec("libmp3lame")
+          .audioBitrate(`${bitrate}k`)
+          .format("mp3")
+          .save(tryOut)
+          .on("end", resolve)
+          .on("error", reject)
+      )
+      outFile = tryOut
+      fs.unlinkSync(inFile)
+    } catch { outFile = inFile }
+  }
+
+  if (fileSizeMB(outFile) > 99) {
+    fs.unlinkSync(outFile)
+    return await conn.sendMessage(chatId, { text: "❌ El archivo de audio supera 99MB." }, { quoted: msg })
+  }
+
+  const buffer = fs.readFileSync(outFile)
+  await conn.sendMessage(chatId, {
+    audio: buffer,
+    mimetype: "audio/mpeg",
+    fileName: `${title}.mp3`
+  }, { quoted: msg })
+
+  try { fs.unlinkSync(outFile) } catch {}
 }
 
 const handler = async (msg, { conn, text }) => {
-  const pref = global.prefixes?.[0] || ".";
+  const pref = global.prefixes?.[0] || "."
 
   if (!text?.trim()) {
     return conn.sendMessage(msg.key.remoteJid, {
       text: `✳️ Usa:\n${pref}play <término>\nEj: *${pref}play* bad bunny diles`
-    }, { quoted: msg });
+    }, { quoted: msg })
   }
 
-  await conn.sendMessage(msg.key.remoteJid, { react: { text: "⏳", key: msg.key } });
+  await conn.sendMessage(msg.key.remoteJid, { react: { text: "⏳", key: msg.key } })
 
-  const res = await yts(text);
-  const video = res.videos?.[0];
-  if (!video) return conn.sendMessage(msg.key.remoteJid, { text: "❌ Sin resultados." }, { quoted: msg });
+  const res = await yts(text)
+  const video = res.videos?.[0]
+  if (!video) return conn.sendMessage(msg.key.remoteJid, { text: "❌ Sin resultados." }, { quoted: msg })
 
-  const { url: videoUrl, title, timestamp: duration, views, author, thumbnail } = video;
-  const viewsFmt = (views || 0).toLocaleString();
+  const { url: videoUrl, title, timestamp: duration, views, author, thumbnail } = video
+  const viewsFmt = (views || 0).toLocaleString()
 
-  // Enviar miniatura + info
+  // 📌 Info enviada al instante
   await conn.sendMessage(msg.key.remoteJid, {
     image: { url: thumbnail },
     caption: `
@@ -64,69 +116,44 @@ const handler = async (msg, { conn, text }) => {
 ❥ Vistas: ${viewsFmt}
 ❥ Autor: ${author?.name || author || "Desconocido"}
 ❥ Link: ${videoUrl}
-❥ API: api-sky.ultraplus.click
+❥ API: SKY / Multi API
 `.trim()
-  }, { quoted: msg });
+  }, { quoted: msg })
 
-  await conn.sendMessage(msg.key.remoteJid, { text: `🎶 Descargando audio: *${title}*` }, { quoted: msg });
+  let attempt = 0, success = false, lastError = null
+  let apiUsed = "Desconocida", mediaUrl = null, bitrate = 64
 
-  try {
-    await downloadAudio(conn, videoUrl, title, msg);
-    await conn.sendMessage(msg.key.remoteJid, { react: { text: "✅", key: msg.key } });
-  } catch (e) {
-    console.error(e);
-    await conn.sendMessage(msg.key.remoteJid, { text: "❌ Error al descargar el audio." }, { quoted: msg });
-  }
-};
-
-async function downloadAudio(conn, videoUrl, title, quoted) {
-  const data = await callMyApi(videoUrl);
-  const mediaUrl = data.audio || data.video;
-  if (!mediaUrl) throw new Error("No se pudo obtener audio");
-
-  const tmp = path.join(process.cwd(), "tmp");
-  if (!fs.existsSync(tmp)) fs.mkdirSync(tmp, { recursive: true });
-
-  const urlPath = new URL(mediaUrl).pathname || "";
-  const ext = (urlPath.split(".").pop() || "").toLowerCase();
-  const inFile = path.join(tmp, `${Date.now()}_in.${ext || "bin"}`);
-  await downloadToFile(mediaUrl, inFile);
-
-  let outFile = inFile;
-  if (ext !== "mp3") {
-    const tryOut = path.join(tmp, `${Date.now()}_out.mp3`);
+  while (attempt < 3 && !success) {
     try {
-      await new Promise((resolve, reject) =>
-        ffmpeg(inFile)
-          .audioCodec("libmp3lame")
-          .audioBitrate("128k")
-          .format("mp3")
-          .save(tryOut)
-          .on("end", resolve)
-          .on("error", reject)
-      );
-      outFile = tryOut;
-      fs.unlinkSync(inFile);
-    } catch { outFile = inFile; }
+      if (attempt > 0) await new Promise(r => setTimeout(r, 5000)) // 5 seg
+      const result = await fastApi(videoUrl)
+      apiUsed = result.api
+      mediaUrl = result.url
+      bitrate = result.bitrate || 64
+      if (!mediaUrl) throw new Error("No se pudo obtener audio")
+      success = true
+    } catch (err) {
+      lastError = err
+      attempt++
+    }
   }
 
-  if (fileSizeMB(outFile) > 99) {
-    fs.unlinkSync(outFile);
-    return await conn.sendMessage(quoted.key.remoteJid, { text: "❌ El archivo de audio supera 99MB." }, { quoted });
+  if (success && mediaUrl) {
+    // Descarga en paralelo al renderizado
+    downloadAudioFile(conn, msg, mediaUrl, title, bitrate)
+      .then(() => conn.sendMessage(msg.key.remoteJid, { react: { text: "✅", key: msg.key } }))
+      .catch(async e => {
+        await conn.sendMessage(msg.key.remoteJid, { react: { text: "❌", key: msg.key } })
+        await conn.sendMessage(msg.key.remoteJid, { text: `❌ Error: ${e?.message || "Desconocido"}` }, { quoted: msg })
+      })
+  } else {
+    await conn.sendMessage(msg.key.remoteJid, { react: { text: "❌", key: msg.key } })
+    await conn.sendMessage(msg.key.remoteJid, { text: `❌ No se pudo descargar el audio.\nError: ${lastError?.message || "Desconocido"}` }, { quoted: msg })
   }
-
-  const buffer = fs.readFileSync(outFile);
-  await conn.sendMessage(quoted.key.remoteJid, {
-    audio: buffer,
-    mimetype: "audio/mpeg",
-    fileName: `${title}.mp3`
-  }, { quoted });
-
-  try { fs.unlinkSync(outFile); } catch {}
 }
 
-handler.command = ["playpro", "song"];
-handler.help = ["playpro <término>", "song <nombre>"];
-handler.tags = ["descargas"];
+handler.command = ["playpro", "audiox"]
+handler.help = ["play <término>", "audio <nombre>"]
+handler.tags = ["descargas"]
 
-export default handler;
+export default handler
