@@ -39,7 +39,7 @@ const handler = async (msg, { conn, text }) => {
         const tasks = apis.map(api => new Promise(async (resolve, reject) => {
           const controller = new AbortController()
           try {
-            const r = await axios.get(api.url, { timeout: 12000, signal: controller.signal })
+            const r = await axios.get(api.url, { timeout: 9000, signal: controller.signal })
             const link = r.data?.result?.url || r.data?.data?.url
             const quality = r.data?.result?.quality || r.data?.data?.quality || "API decide"
             if (r.data?.status && link) resolve({ url: link, api: api.name, quality, controller })
