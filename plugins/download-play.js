@@ -29,7 +29,7 @@ async function callSky(url) {
   })
   if (!r.data || r.data.status !== "true" || !r.data.data)
     throw new Error("API SKY inválida")
-  return { api: "SKY", data: r.data.data, bitrate: 128 }
+  return { data: r.data.data, bitrate: 128 }
 }
 
 async function callMayApi(url) {
@@ -37,7 +37,7 @@ async function callMayApi(url) {
   const r = await axios.get(apiUrl, { timeout: 6000 })
   if (!r.data || !r.data.status || !r.data.result)
     throw new Error("API MayAPI inválida")
-  return { api: "MayAPI", data: { audio: r.data.result.url }, bitrate: 64 }
+  return { data: { audio: r.data.result.url }, bitrate: 64 }
 }
 
 async function callAdonix(url) {
@@ -45,7 +45,7 @@ async function callAdonix(url) {
   const r = await axios.get(apiUrl, { timeout: 6000 })
   if (!r.data || !r.data.result || !r.data.result.url)
     throw new Error("API Adonix inválida")
-  return { api: "Adonix", data: { audio: r.data.result.url }, bitrate: 64 }
+  return { data: { audio: r.data.result.url }, bitrate: 64 }
 }
 
 async function fastApi(videoUrl) {
@@ -67,21 +67,19 @@ async function downloadAudioFile(conn, msg, mediaUrl, title, bitrate) {
   let outFile = inFile
   if (!isMp3) {
     const tryOut = path.join(tmp, `${Date.now()}_out.mp3`)
-    try {
-      await new Promise((resolve, reject) =>
-        ffmpeg(inFile)
-          .audioCodec("libmp3lame")
-          .audioBitrate(`${bitrate}k`)
-          .format("mp3")
-          .save(tryOut)
-          .on("end", resolve)
-          .on("error", reject)
-      )
-      outFile = tryOut
-      try { fs.unlinkSync(inFile) } catch {}
-    } catch {
-      outFile = inFile
-    }
+    await new Promise((resolve, reject) =>
+      ffmpeg(inFile)
+        .audioCodec("libmp3lame")
+        .audioBitrate(`${bitrate}k`)
+        .format("mp3")
+        .on("end", () => {
+          outFile = tryOut
+          try { fs.unlinkSync(inFile) } catch {}
+          resolve()
+        })
+        .on("error", reject)
+        .save(tryOut)
+    )
   }
 
   const sizeMB = fileSizeMB(outFile)
@@ -117,12 +115,25 @@ const handler = async (msg, { conn, text }) => {
 
   const { url: videoUrl, title, author, timestamp: duration, thumbnail } = video
 
-  let apiUsed = "Desconocida"
-  let mediaUrl = null
-  let bitrate = 64
+  const caption = `
+> *𝙰𝚄𝙳𝙸𝙾 𝙳𝙾𝚆𝙽𝙻𝙾𝙰𝙳𝙴𝚁*
+
+⭒ 🎵 - *Título:* ${title}
+⭒ 🎤 - *Artista:* ${author?.name || "Desconocido"}
+⭒ 🕑 - *Duración:* ${duration}
+⭒ 📺 - *Calidad:* cargando...
+⭒ 🌐 - *API:* Multi API
+
+» *Enviando audio…* 🎧
+`.trim()
+
+  await conn.sendMessage(msg.key.remoteJid, { image: { url: thumbnail }, caption }, { quoted: msg })
+
   let attempt = 0
   let success = false
   let lastError = null
+  let mediaUrl = null
+  let bitrate = 64
 
   while (attempt < 2 && !success) {
     try {
@@ -130,7 +141,6 @@ const handler = async (msg, { conn, text }) => {
         await conn.sendMessage(msg.key.remoteJid, { react: { text: "🔁", key: msg.key } })
 
       const result = await fastApi(videoUrl)
-      apiUsed = result.api
       mediaUrl = result.data.audio || result.data.video
       bitrate = result.bitrate || 64
       if (!mediaUrl) throw new Error("No se pudo obtener audio")
@@ -142,20 +152,6 @@ const handler = async (msg, { conn, text }) => {
       if (attempt < 2) await new Promise(r => setTimeout(r, 1500))
     }
   }
-
-  const caption = `
-> *𝙰𝚄𝙳𝙸𝙾 𝙳𝙾𝚆𝙽𝙻𝙾𝙰𝙳𝙴𝚁*
-
-⭒ 🎵 - *Título:* ${title}
-⭒ 🎤 - *Artista:* ${author?.name || "Desconocido"}
-⭒ 🕑 - *Duración:* ${duration}
-⭒ 📺 - *Calidad:* ${bitrate}kbps
-⭒ 🌐 - *API:* ${apiUsed}
-
-» *Enviando audio…* 🎧
-`.trim()
-
-  await conn.sendMessage(msg.key.remoteJid, { image: { url: thumbnail }, caption }, { quoted: msg })
 
   if (success && mediaUrl) {
     downloadAudioFile(conn, msg, mediaUrl, title, bitrate).then(() => {
