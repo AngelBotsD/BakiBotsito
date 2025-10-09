@@ -27,23 +27,26 @@ async function callSky(url) {
     headers: { Authorization: `Bearer ${API_KEY}` },
     timeout: 6000,
   });
-  if (!r.data || r.data.status !== "true" || !r.data.data)
-    throw new Error("API SKY inválida");
+  if (!r.data || r.data.status !== "true" || !r.data.data) throw new Error("API SKY inválida");
   return { api: "SKY", data: r.data.data };
 }
 
 async function callMayApi(url) {
-  const apiUrl = `https://mayapi.ooguy.com/ytdl?url=${encodeURIComponent(
-    url
-  )}&type=mp3&quality=64&apikey=may-0595dca2`;
+  const apiUrl = `https://mayapi.ooguy.com/ytdl?url=${encodeURIComponent(url)}&type=mp3&quality=128&apikey=may-0595dca2`;
   const r = await axios.get(apiUrl, { timeout: 6000 });
-  if (!r.data || !r.data.status || !r.data.result)
-    throw new Error("API MayAPI inválida");
+  if (!r.data || !r.data.status || !r.data.result) throw new Error("API MayAPI inválida");
   return { api: "MayAPI", data: { audio: r.data.result.url } };
 }
 
+async function callAdonix(videoUrl) {
+  const url = `https://api-adonix.ultraplus.click/download/ytmp3?apikey=SoyMaycol<3&url=${encodeURIComponent(videoUrl)}&quality=128`;
+  const r = await axios.get(url, { timeout: 6000 });
+  if (!r.data || !r.data.result || !r.data.result.url) throw new Error("API Adonix inválida");
+  return { api: "Adonix", data: { audio: r.data.result.url } };
+}
+
 async function fastApi(videoUrl) {
-  const tasks = [callSky(videoUrl), callMayApi(videoUrl)];
+  const tasks = [callSky(videoUrl), callMayApi(videoUrl), callAdonix(videoUrl)];
   return await Promise.any(tasks);
 }
 
@@ -146,7 +149,6 @@ const handler = async (msg, { conn, text }) => {
 
   const { url: videoUrl, title, author, timestamp: duration, thumbnail } = video;
 
-  // Envía la info al instante
   const caption = `
 > *𝙰𝚄𝙳𝙸𝙾 𝙳𝙾𝚆𝙽𝙻𝙾𝙰𝙳𝙴𝚁*
 
@@ -159,7 +161,6 @@ const handler = async (msg, { conn, text }) => {
 
   await conn.sendMessage(msg.key.remoteJid, { image: { url: thumbnail }, caption }, { quoted: msg });
 
-  // Descarga el audio en segundo plano
   handleDownload(conn, msg, videoUrl, title).catch(console.error);
 };
 
