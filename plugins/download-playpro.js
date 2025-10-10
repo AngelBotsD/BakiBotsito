@@ -108,7 +108,6 @@ const handler = async (msg, { conn, text }) => {
   await conn.sendMessage(msg.key.remoteJid, {
     image: { url: thumbnail },
     caption: `
-❦𝑳𝑨 𝑺𝑼𝑲𝑰 𝑩𝑶𝑻❦
 
 📀 Info del video:
 ❥ Título: ${title}
