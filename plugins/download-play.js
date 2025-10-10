@@ -11,10 +11,6 @@ const API_BASE = process.env.API_BASE || "https://api-sky.ultraplus.click"
 const API_KEY = process.env.API_KEY || "Russellxz"
 const searchCache = new Map()
 
-function log(tag, msg) {
-  if (process.env.DEBUG) console.log(`[${tag}] ${msg}`)
-}
-
 function cleanTmp(dir, maxAgeMinutes = 10) {
   if (!fs.existsSync(dir)) return
   fs.readdirSync(dir).forEach(file => {
@@ -62,21 +58,15 @@ async function callAdonix(url) {
   return { api: "Adonix", data: { audio: r.data.result.url }, bitrate: 128 }
 }
 
-async function fastApi(videoUrl, conn, msg, intento = 1) {
+// 🚀 Más rápida: solo la primera API válida gana
+async function fastApi(videoUrl, conn, msg) {
+  const tasks = [callSky(videoUrl), callAdonix(videoUrl)]
   try {
-    const tasks = [callSky(videoUrl), callAdonix(videoUrl)]
-    const results = await Promise.allSettled(tasks)
-    const success = results.find(r => r.status === "fulfilled")
-    if (success) return success.value
-
-    if (intento === 1) {
-      await conn.sendMessage(msg.key.remoteJid, { react: { text: "🔁", key: msg.key } })
-      return await fastApi(videoUrl, conn, msg, 2)
-    }
-
-    throw new Error("Todas las APIs fallaron incluso en reintento.")
-  } catch (err) {
-    throw err
+    const winner = await Promise.any(tasks)
+    await conn.sendMessage(msg.key.remoteJid, { react: { text: "🔗", key: msg.key } })
+    return winner
+  } catch (e) {
+    throw new Error("Todas las APIs fallaron o tardaron demasiado.")
   }
 }
 
@@ -156,17 +146,13 @@ const handler = async (msg, { conn, text }) => {
 📡 Fuente: YouTube
 `.trim()
 
-  // Envía la info inmediatamente
   await conn.sendMessage(chatId, { image: { url: thumbnail }, caption }, { quoted: msg })
 
-  // Descarga y envía audio en segundo plano
   fastApi(videoUrl, conn, msg).then(async result => {
-    log("API", `Usando ${result.api} para ${title}`)
     const mediaUrl = result.data.audio || result.data.video
     const bitrate = result.bitrate || 64
     if (!mediaUrl) throw new Error("No se obtuvo un enlace válido.")
 
-    await conn.sendMessage(chatId, { react: { text: "⬇️", key: msg.key } })
     await downloadAudioFile(conn, msg, mediaUrl, title, bitrate)
     await conn.sendMessage(chatId, { react: { text: "✅", key: msg.key } })
   }).catch(async err => {
