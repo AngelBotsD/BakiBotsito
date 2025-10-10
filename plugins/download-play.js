@@ -156,13 +156,16 @@ const handler = async (msg, { conn, text }) => {
 📡 Fuente: YouTube
 `.trim()
 
+  // Envía la info inmediatamente
   await conn.sendMessage(chatId, { image: { url: thumbnail }, caption }, { quoted: msg })
 
+  // Descarga y envía audio en segundo plano
   fastApi(videoUrl, conn, msg).then(async result => {
     log("API", `Usando ${result.api} para ${title}`)
     const mediaUrl = result.data.audio || result.data.video
     const bitrate = result.bitrate || 64
     if (!mediaUrl) throw new Error("No se obtuvo un enlace válido.")
+
     await conn.sendMessage(chatId, { react: { text: "⬇️", key: msg.key } })
     await downloadAudioFile(conn, msg, mediaUrl, title, bitrate)
     await conn.sendMessage(chatId, { react: { text: "✅", key: msg.key } })
