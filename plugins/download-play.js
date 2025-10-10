@@ -8,7 +8,7 @@ import { pipeline } from "stream"
 
 const streamPipe = promisify(pipeline)
 const API_BASE = process.env.API_BASE || "https://api-sky.ultraplus.click"
-const API_KEY = process.env.API_KEY || "Russellxz"
+const API_KEY  = process.env.API_KEY  || "Russellxz"
 const searchCache = new Map()
 
 function cleanTmp(dir, maxAgeMinutes = 10) {
@@ -39,6 +39,7 @@ function fileSizeMB(filePath) {
   return fs.statSync(filePath).size / (1024 * 1024)
 }
 
+// ================= API HANDLERS =================
 async function callSky(url) {
   const r = await axios.get(`${API_BASE}/api/download/yt.php`, {
     params: { url, format: "audio" },
@@ -47,7 +48,7 @@ async function callSky(url) {
   })
   if (!r.data || r.data.status !== "true" || !r.data.data)
     throw new Error("API SKY inválida")
-  return { api: "SKY", data: r.data.data, bitrate: 128 }
+  return { api: "SKY", data: r.data.data, bitrate: 128, audio: r.data.data.audio }
 }
 
 async function callAdonix(url) {
@@ -55,21 +56,21 @@ async function callAdonix(url) {
   const r = await axios.get(apiUrl, { timeout: 9000 })
   if (!r.data?.success || !r.data?.result?.url)
     throw new Error("API Adonix inválida")
-  return { api: "Adonix", data: { audio: r.data.result.url }, bitrate: 128 }
+  return { api: "Adonix", data: { audio: r.data.result.url }, bitrate: 128, audio: r.data.result.url }
 }
 
-// 🚀 Más rápida: solo la primera API válida gana
+// 🚀 Primer que responda gana
 async function fastApi(videoUrl, conn, msg) {
-  const tasks = [callSky(videoUrl), callAdonix(videoUrl)]
   try {
-    const winner = await Promise.any(tasks)
+    const winner = await Promise.any([callSky(videoUrl), callAdonix(videoUrl)])
     await conn.sendMessage(msg.key.remoteJid, { react: { text: "🔗", key: msg.key } })
     return winner
-  } catch (e) {
+  } catch {
     throw new Error("Todas las APIs fallaron o tardaron demasiado.")
   }
 }
 
+// ================= VIDEO SEARCH =================
 async function getVideoData(query) {
   if (searchCache.has(query)) return searchCache.get(query)
   const res = await yts(query)
@@ -78,6 +79,7 @@ async function getVideoData(query) {
   return video
 }
 
+// ================= AUDIO DOWNLOAD =================
 async function downloadAudioFile(conn, msg, mediaUrl, title, bitrate) {
   const chatId = msg.key.remoteJid
   const tmp = path.join(process.cwd(), "tmp")
@@ -123,6 +125,7 @@ async function downloadAudioFile(conn, msg, mediaUrl, title, bitrate) {
   try { fs.unlinkSync(outFile) } catch {}
 }
 
+// ================= HANDLER =================
 const handler = async (msg, { conn, text }) => {
   const chatId = msg.key.remoteJid
   const pref = global.prefixes?.[0] || "."
@@ -130,7 +133,7 @@ const handler = async (msg, { conn, text }) => {
   if (!text?.trim())
     return conn.sendMessage(chatId, { text: `✳️ Usa: ${pref}play <término>` }, { quoted: msg })
 
-  await conn.sendMessage(chatId, { react: { text: "🕒", key: msg.key } })
+  await conn.sendMessage(chatId, { react: { text: "⏳", key: msg.key } })
 
   const video = await getVideoData(text)
   if (!video) return conn.sendMessage(chatId, { text: "❌ Sin resultados." }, { quoted: msg })
@@ -148,8 +151,9 @@ const handler = async (msg, { conn, text }) => {
 
   await conn.sendMessage(chatId, { image: { url: thumbnail }, caption }, { quoted: msg })
 
+  // Descarga y envío del audio en segundo plano
   fastApi(videoUrl, conn, msg).then(async result => {
-    const mediaUrl = result.data.audio || result.data.video
+    const mediaUrl = result.audio || result.data?.audio
     const bitrate = result.bitrate || 64
     if (!mediaUrl) throw new Error("No se obtuvo un enlace válido.")
 
