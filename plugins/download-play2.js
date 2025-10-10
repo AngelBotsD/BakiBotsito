@@ -10,6 +10,7 @@ const TMP_DIR = path.join(process.cwd(), "tmp")
 const MAX_FILE_SIZE = 60 * 1024 * 1024
 const MAX_INTENTOS = 2
 
+// 🧹 Limpieza automática de tmp (archivos >30 min)
 async function cleanTmp() {
   if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR)
   const now = Date.now()
@@ -22,47 +23,73 @@ async function cleanTmp() {
   }
 }
 
+// 📥 Descarga con límite de tamaño y timeout de progreso
 async function downloadStream(url, destPath) {
-  const res = await axios.get(url, { responseType: "stream", timeout: 0 })
+  const res = await axios.get(url, { responseType: "stream", timeout: 15000 })
   let total = 0
+  let lastChunkTime = Date.now()
+
+  const timer = setInterval(() => {
+    if (Date.now() - lastChunkTime > 10000) {
+      res.data.destroy()
+    }
+  }, 2000)
+
   await new Promise((resolve, reject) => {
     const ws = fs.createWriteStream(destPath)
     res.data.on("data", chunk => {
       total += chunk.length
+      lastChunkTime = Date.now()
       if (total > MAX_FILE_SIZE) {
         res.data.destroy()
         ws.close()
         if (fs.existsSync(destPath)) fs.unlinkSync(destPath)
-        return reject(new Error("El archivo excede el límite de 60 MB."))
+        clearInterval(timer)
+        reject(new Error("El archivo excede el límite de 60 MB."))
       }
     })
-    res.data.pipe(ws)
-    ws.on("finish", resolve)
+    res.data.on("end", () => {
+      clearInterval(timer)
+      resolve()
+    })
+    res.data.on("error", err => {
+      clearInterval(timer)
+      reject(err)
+    })
     ws.on("error", reject)
+    res.data.pipe(ws)
   })
+
   return destPath
 }
 
+// 🧩 Compite entre APIs y cancela las perdedoras
 async function raceApis(apis) {
   const controllers = apis.map(() => new AbortController())
-  const tasks = apis.map((api, i) => new Promise(async (resolve, reject) => {
+  const timeoutMs = 10000 // timeout global de 10s
+
+  const timeoutPromise = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error("Timeout global: ninguna API respondió.")), timeoutMs)
+  )
+
+  const tasks = apis.map((api, i) => (async () => {
     try {
       const res = await axios.get(api.url, { timeout: 9000, signal: controllers[i].signal })
       const link = res.data?.result?.url || res.data?.data?.url
       const quality = res.data?.result?.quality || res.data?.data?.quality || "API decide"
-      if (link) resolve({ url: link, api: api.name, quality })
-      else reject(new Error("Respuesta inválida"))
+      if (link) return { url: link, api: api.name, quality }
+      throw new Error("Respuesta inválida")
     } catch (err) {
-      reject(err)
+      throw new Error(`${api.name}: ${err.message}`)
     }
-  }))
+  })())
 
-  const winner = await Promise.any(tasks)
-  // Cancelar las perdedoras
+  const winner = await Promise.race([Promise.any(tasks), timeoutPromise])
   controllers.forEach(c => c.abort())
   return winner
 }
 
+// 🎬 Comando principal
 const handler = async (msg, { conn, text }) => {
   const chat = msg.key.remoteJid
 
@@ -73,10 +100,7 @@ const handler = async (msg, { conn, text }) => {
 
   await cleanTmp()
 
-  const [search] = await Promise.all([
-    yts({ query: text, hl: "es", gl: "MX" }),
-  ])
-
+  const search = await yts({ query: text, hl: "es", gl: "MX" })
   const video = search.videos?.[0]
   if (!video) return conn.sendMessage(chat, { text: "❌ Sin resultados." }, { quoted: msg })
 
@@ -97,23 +121,30 @@ const handler = async (msg, { conn, text }) => {
     intento++
     try {
       winner = await raceApis(apis)
-    } catch {
+    } catch (e) {
+      console.log(`[❌ INTENTO ${intento}]`, e.message)
       if (intento === 1)
         await conn.sendMessage(chat, { react: { text: "🔗", key: msg.key } })
       if (intento >= MAX_INTENTOS)
-        throw new Error("❌ Todas las APIs fallaron después de dos intentos.")
+        return conn.sendMessage(chat, { text: `❌ Error: ${e.message}` }, { quoted: msg })
     }
   }
 
   const outFile = path.join(TMP_DIR, `${Date.now()}_video.mp4`)
-  await downloadStream(winner.url, outFile)
+
+  try {
+    await downloadStream(winner.url, outFile)
+  } catch (err) {
+    console.error("[❌ Error de descarga]", err)
+    return conn.sendMessage(chat, { text: `⚠️ Error al descargar:\n${err.message}` }, { quoted: msg })
+  }
 
   await conn.sendMessage(chat, {
     video: fs.readFileSync(outFile),
     mimetype: "video/mp4",
     fileName: `${safeTitle}.mp4`,
     caption: `
-> *🎬 VIDEO DESCARGADO*
+> 🎬 *VIDEO DESCARGADO*
 
 🎵 *Título:* ${title}
 🎤 *Artista:* ${artista}
