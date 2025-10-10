@@ -6,23 +6,83 @@ import { promisify } from "util"
 import { pipeline } from "stream"
 
 const streamPipe = promisify(pipeline)
+const TMP_DIR = path.join(process.cwd(), "tmp")
 const MAX_FILE_SIZE = 60 * 1024 * 1024
 const MAX_INTENTOS = 2
 
+async function cleanTmp() {
+  if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR)
+  const now = Date.now()
+  for (const f of fs.readdirSync(TMP_DIR)) {
+    const fp = path.join(TMP_DIR, f)
+    try {
+      const stats = fs.statSync(fp)
+      if (now - stats.mtimeMs > 30 * 60 * 1000) fs.unlinkSync(fp)
+    } catch {}
+  }
+}
+
+async function downloadStream(url, destPath) {
+  const res = await axios.get(url, { responseType: "stream", timeout: 0 })
+  let total = 0
+  await new Promise((resolve, reject) => {
+    const ws = fs.createWriteStream(destPath)
+    res.data.on("data", chunk => {
+      total += chunk.length
+      if (total > MAX_FILE_SIZE) {
+        res.data.destroy()
+        ws.close()
+        if (fs.existsSync(destPath)) fs.unlinkSync(destPath)
+        return reject(new Error("El archivo excede el límite de 60 MB."))
+      }
+    })
+    res.data.pipe(ws)
+    ws.on("finish", resolve)
+    ws.on("error", reject)
+  })
+  return destPath
+}
+
+async function raceApis(apis) {
+  const controllers = apis.map(() => new AbortController())
+  const tasks = apis.map((api, i) => new Promise(async (resolve, reject) => {
+    try {
+      const res = await axios.get(api.url, { timeout: 9000, signal: controllers[i].signal })
+      const link = res.data?.result?.url || res.data?.data?.url
+      const quality = res.data?.result?.quality || res.data?.data?.quality || "API decide"
+      if (link) resolve({ url: link, api: api.name, quality })
+      else reject(new Error("Respuesta inválida"))
+    } catch (err) {
+      reject(err)
+    }
+  }))
+
+  const winner = await Promise.any(tasks)
+  // Cancelar las perdedoras
+  controllers.forEach(c => c.abort())
+  return winner
+}
+
 const handler = async (msg, { conn, text }) => {
-  if (!text || !text.trim())
-    return conn.sendMessage(msg.key.remoteJid, { text: "🎬 Ingresa el nombre de algún video" }, { quoted: msg })
+  const chat = msg.key.remoteJid
 
-  await conn.sendMessage(msg.key.remoteJid, { react: { text: "🕒", key: msg.key } })
+  if (!text?.trim())
+    return conn.sendMessage(chat, { text: "🎬 Ingresa el nombre de algún video." }, { quoted: msg })
 
-  const search = await yts({ query: text, hl: "es", gl: "MX" })
-  const video = search.videos[0]
-  if (!video)
-    return conn.sendMessage(msg.key.remoteJid, { text: "❌ Sin resultados." }, { quoted: msg })
+  await conn.sendMessage(chat, { react: { text: "🕒", key: msg.key } })
 
-  const { url: videoUrl, title, timestamp: duration, author } = video
-  const artista = author.name
-  const safeTitle = title ? title.replace(/[\\\/:*?"<>|]/g, "") : "video"
+  await cleanTmp()
+
+  const [search] = await Promise.all([
+    yts({ query: text, hl: "es", gl: "MX" }),
+  ])
+
+  const video = search.videos?.[0]
+  if (!video) return conn.sendMessage(chat, { text: "❌ Sin resultados." }, { quoted: msg })
+
+  const { url: videoUrl, title, author, timestamp: duration } = video
+  const artista = author?.name || "Desconocido"
+  const safeTitle = title.replace(/[\\\/:*?"<>|]/g, "")
 
   const apis = [
     { name: "MayAPI", url: `https://mayapi.ooguy.com/ytdl?url=${encodeURIComponent(videoUrl)}&type=mp4&apikey=may-0595dca2` },
@@ -30,87 +90,49 @@ const handler = async (msg, { conn, text }) => {
     { name: "Adofreekey", url: `https://api-adonix.ultraplus.click/download/ytmp4?apikey=Adofreekey&url=${encodeURIComponent(videoUrl)}` }
   ]
 
-  const tryDownload = async () => {
-    let winner = null
-    let intentos = 0
-    while (!winner && intentos < MAX_INTENTOS) {
-      intentos++
-      try {
-        const tasks = apis.map(api => new Promise(async (resolve, reject) => {
-          const controller = new AbortController()
-          try {
-            const r = await axios.get(api.url, { timeout: 9000, signal: controller.signal })
-            const link = r.data?.result?.url || r.data?.data?.url
-            const quality = r.data?.result?.quality || r.data?.data?.quality || "API decide"
-            if (r.data?.status && link) resolve({ url: link, api: api.name, quality, controller })
-            else reject(new Error("Sin link válido"))
-          } catch (err) {
-            if (!err.message.toLowerCase().includes("aborted")) reject(err)
-          }
-        }))
-        winner = await Promise.any(tasks)
-        tasks.forEach(t => { if (t !== winner && t.controller) t.controller.abort() })
-      } catch (e) {
-        if (intentos === 1)
-          await conn.sendMessage(msg.key.remoteJid, { react: { text: "🔗", key: msg.key } })
-        if (intentos >= MAX_INTENTOS) throw new Error("No se pudo obtener el video después de 2 intentos.")
-      }
+  let winner = null
+  let intento = 0
+
+  while (!winner && intento < MAX_INTENTOS) {
+    intento++
+    try {
+      winner = await raceApis(apis)
+    } catch {
+      if (intento === 1)
+        await conn.sendMessage(chat, { react: { text: "🔗", key: msg.key } })
+      if (intento >= MAX_INTENTOS)
+        throw new Error("❌ Todas las APIs fallaron después de dos intentos.")
     }
-    return winner
   }
 
-  const tmp = path.join(process.cwd(), "tmp")
-  if (!fs.existsSync(tmp)) fs.mkdirSync(tmp)
-  fs.readdirSync(tmp).forEach(f => { const filePath = path.join(tmp, f); if (fs.existsSync(filePath)) fs.unlinkSync(filePath) })
+  const outFile = path.join(TMP_DIR, `${Date.now()}_video.mp4`)
+  await downloadStream(winner.url, outFile)
 
-  try {
-    const winner = await tryDownload()
-    const file = path.join(tmp, `${Date.now()}_vid.mp4`)
-    const dl = await axios.get(winner.url, { responseType: "stream", timeout: 0 })
-    let totalSize = 0
+  await conn.sendMessage(chat, {
+    video: fs.readFileSync(outFile),
+    mimetype: "video/mp4",
+    fileName: `${safeTitle}.mp4`,
+    caption: `
+> *🎬 VIDEO DESCARGADO*
 
-    await new Promise((resolve, reject) => {
-      const writeStream = fs.createWriteStream(file)
-      dl.data.on("data", chunk => {
-        totalSize += chunk.length
-        if (totalSize > MAX_FILE_SIZE) {
-          dl.data.destroy()
-          if (fs.existsSync(file)) fs.unlinkSync(file)
-          reject(new Error("El archivo excede el límite de 60 MB permitido por WhatsApp."))
-        }
-      })
-      dl.data.on("error", err => reject(err))
-      writeStream.on("finish", resolve)
-      writeStream.on("error", reject)
-      dl.data.pipe(writeStream)
-    })
+🎵 *Título:* ${title}
+🎤 *Artista:* ${artista}
+🕒 *Duración:* ${duration}
+📺 *Calidad:* ${winner.quality}
+🌐 *API:* ${winner.api}
 
-    await conn.sendMessage(msg.key.remoteJid, {
-      video: fs.readFileSync(file),
-      mimetype: "video/mp4",
-      fileName: `${safeTitle}.mp4`,
-      caption: `
-> 𝚅𝙸𝙳𝙴𝙾 𝙳𝙾𝚆𝙽𝙻𝙾𝙰𝙳𝙴𝚁
+✅ *Video enviado correctamente.*
+    `.trim(),
+    supportsStreaming: true,
+    contextInfo: { isHd: true }
+  }, { quoted: msg })
 
-⭒ 🎵 - Título: ${title}
-⭒ 🎤 - Artista: ${artista}
-⭒ 🕑 - Duración: ${duration}
-⭒ 📺 - Calidad: ${winner.quality}
-⭒ 🌐 - API: ${winner.api}
-
-» VIDEO ENVIADO 🎧
-      `.trim(),
-      supportsStreaming: true,
-      contextInfo: { isHd: true }
-    }, { quoted: msg })
-
-    if (fs.existsSync(file)) fs.unlinkSync(file)
-    await conn.sendMessage(msg.key.remoteJid, { react: { text: "✅", key: msg.key } })
-  } catch (e) {
-    console.error(e)
-    await conn.sendMessage(msg.key.remoteJid, { text: `⚠️ Error al descargar el video:\n\n${e.message}` }, { quoted: msg })
-  }
+  await conn.sendMessage(chat, { react: { text: "✅", key: msg.key } })
+  try { fs.unlinkSync(outFile) } catch {}
 }
 
 handler.command = ["play2"]
+handler.help = ["play2 <nombre>"]
+handler.tags = ["descargas"]
+
 export default handler
