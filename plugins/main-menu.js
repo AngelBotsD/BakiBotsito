@@ -60,7 +60,7 @@ const defaultMenu = {
 header: '┏━━━━━━━━━━━━━━━━\n┃%category\n┣━━━━━━━━━━━━━━━━',
   body: '┃ %cmd',
   footer: '┗━━━━━━━━━━━━━━━━',
-  after: `© ${textbot}`,
+  after: `© xf`,
 };
 
 let handler = async (m, { conn, usedPrefix: _p, __dirname }) => {
