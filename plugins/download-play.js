@@ -44,7 +44,7 @@ async function callSky(url) {
   const r = await axios.get(`${API_BASE}/api/download/yt.php`, {
     params: { url, format: "audio" },
     headers: { Authorization: `Bearer ${API_KEY}` },
-    timeout: 9000
+    timeout: 10000
   })
   if (!r.data || r.data.status !== "true" || !r.data.data)
     throw new Error("API SKY inválida")
@@ -53,7 +53,7 @@ async function callSky(url) {
 
 async function callAdonix(url) {
   const apiUrl = `https://adonixapi.site/api/v1/ytmp3?url=${encodeURIComponent(url)}`
-  const r = await axios.get(apiUrl, { timeout: 9000 })
+  const r = await axios.get(apiUrl, { timeout: 10000 })
   if (!r.data?.success || !r.data?.result?.url)
     throw new Error("API Adonix inválida")
   return { api: "Adonix", data: { audio: r.data.result.url }, bitrate: 128, audio: r.data.result.url }
