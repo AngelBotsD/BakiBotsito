@@ -1,51 +1,42 @@
 import axios from 'axios';
 
-const handler = async (m, { isOwner, isAdmin, conn, text, participants, args, command, usedPrefix }) => {
-  if (usedPrefix.toLowerCase() === 'a') return;
+const handler = async (m, { conn, participants }) => {
+  const total = participants.length;
+  let texto = `*!  MENCION GENERAL  !*\n`;
+  texto += `   *PARA ${total} MIEMBROS* \n\n`;
 
-  const customEmoji = global.db?.data?.chats?.[m.chat]?.customEmoji || '🧃';
-  m.react(customEmoji);
+  for (const user of participants) {
+    const lid = user.id.split('@')[0]; // Extraer el lid o número
+    let flag = '🇺🇳'; // Bandera por defecto
 
-  if (!(isAdmin || isOwner)) {
-    global.dfail('admin', m, conn);
-    return;
-  }
+    // Verificar si el lid es un número válido
+    if (lid.match(/^\d+$/)) {
+      try {
+        // Hacer la solicitud a la API de Gemini
+        const response = await axios.get(`https://g-mini-ia.vercel.app/api/infonumero?numero=${lid}`);
+        const data = response.data;
 
-  const mensaje = args.join` `;
-  const info = mensaje ? `╰➤ ✉️ *Mensaje:* ${mensaje}` : "╰➤ ⚠️ *Invocación general*";
-
-  let texto = `
-
-╭══ LLAMADO A TODOS ══⬣
-│  🧃 Total: ${participants.length}
-│  ⚡ Grupo: ${await conn.getName(m.chat)}
-${info}
-╰═══⬣\n`;
-
-  for (const miembro of participants) {
-    const number = miembro.id.split('@')[0];
-    let flag = "🌐";
-    try {
-      const res = await axios.get(`https://g-mini-ia.vercel.app/api/infonumero?numero=${number}`);
-      flag = res.data.bandera || "🌐";
-    } catch (e) {
-      console.log(`❌ Error obteniendo bandera de ${number}:`, e);
+        // Verificar si la respuesta contiene información del país
+        if (data && data.country) {
+          // Convertir el código del país a una bandera
+          flag = String.fromCodePoint(...[...data.country.toUpperCase()].map(c => 127397 + c.charCodeAt()));
+        }
+      } catch (error) {
+        console.error('Error al obtener información del número:', error);
+      }
     }
-    texto += `┃ ${flag} @${number}\n`;
+
+    // Agregar la mención con la bandera correspondiente
+    texto += `┊» ${flag} @${lid}\n`;
   }
 
-  texto += `╰══⬣\n✨ *Pikachu Bot* ⚔️`;
-
-  conn.sendMessage(m.chat, {
-    text: texto.trim(),
-    mentions: participants.map(p => p.id)
-  }, { quoted: m });
+  // Enviar el mensaje con menciones
+  await conn.sendMessage(m.chat, { text: texto, mentions: participants.map(p => p.id) }, { quoted: m });
 };
 
-handler.help = ['todos <mensaje>'];
-handler.tags = ['grupo'];
-handler.command = ['tagall', 'todos'];
-handler.admin = true;
+handler.customPrefix = /^\.?(todos)$/i;
+handler.command = new RegExp();
 handler.group = true;
+handler.admin = true;
 
 export default handler;
