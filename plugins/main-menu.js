@@ -203,8 +203,7 @@ let handler = async (m, { conn, usedPrefix: _p, __dirname }) => {
 
 handler.help = ['allmenu'];
 handler.tags = ['main'];
-handler.command = ['allmenu', 'menucompleto', 'menúcompleto', 'help', 'menu2'];
-handler.register = true;
+handler.command = ['menu', 'menucompleto', 'menúcompleto', 'help', 'menu2'];
 export default handler;
 
 const more = String.fromCharCode(8206);
