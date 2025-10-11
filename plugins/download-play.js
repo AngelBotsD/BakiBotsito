@@ -63,7 +63,7 @@ async function callAdonix(url) {
 async function fastApi(videoUrl, conn, msg) {
   try {
     const winner = await Promise.any([callSky(videoUrl), callAdonix(videoUrl)])
-    await conn.sendMessage(msg.key.remoteJid, { react: { text: "🔗", key: msg.key } })
+    await conn.sendMessage(msg.key.remoteJid, { react: { text: "🔁", key: msg.key } })
     return winner
   } catch {
     throw new Error("Todas las APIs fallaron o tardaron demasiado.")
@@ -133,7 +133,7 @@ const handler = async (msg, { conn, text }) => {
   if (!text?.trim())
     return conn.sendMessage(chatId, { text: `✳️ Usa: ${pref}play <término>` }, { quoted: msg })
 
-  await conn.sendMessage(chatId, { react: { text: "⏳", key: msg.key } })
+  await conn.sendMessage(chatId, { react: { text: "🕒", key: msg.key } })
 
   const video = await getVideoData(text)
   if (!video) return conn.sendMessage(chatId, { text: "❌ Sin resultados." }, { quoted: msg })
