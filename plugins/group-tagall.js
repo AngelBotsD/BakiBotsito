@@ -1,58 +1,51 @@
-import { parsePhoneNumberFromString } from 'libphonenumber-js';
+import axios from 'axios';
 
-const handler = async (m, { conn, participants, groupMetadata }) => {
-  const total = participants.length;
-  let texto = `*!  MENCION GENERAL  !*\n`;
-  texto += `   *PARA ${total} MIEMBROS* \n\n`;
+const handler = async (m, { isOwner, isAdmin, conn, text, participants, args, command, usedPrefix }) => {
+  if (usedPrefix.toLowerCase() === 'a') return;
 
-  // Cambia esto según el país principal de tu grupo
-  const defaultCountryCode = 'CO'; // 🇨🇴 Colombia
+  const customEmoji = global.db?.data?.chats?.[m.chat]?.customEmoji || '🧃';
+  m.react(customEmoji);
 
-  // Función para convertir código ISO a emoji de bandera
-  const countryCodeToFlagEmoji = (countryCode) =>
-    countryCode
-      ? String.fromCodePoint(...[...countryCode.toUpperCase()].map(c => 127397 + c.charCodeAt()))
-      : '🇺🇳';
-
-  // Función para obtener la bandera de cada participante
-  const getFlagFromParticipant = (user) => {
-    let lid = user.id.split('@')[0]; // extraer lid o número
-
-    if (!lid.match(/^\d+$/)) {
-      // si no es un número, usamos la bandera del grupo
-      return countryCodeToFlagEmoji(defaultCountryCode);
-    }
-
-    // agregar + para libphonenumber
-    const numero = '+' + lid;
-    const phoneNumber = parsePhoneNumberFromString(numero);
-
-    return phoneNumber?.country
-      ? countryCodeToFlagEmoji(phoneNumber.country)
-      : countryCodeToFlagEmoji(defaultCountryCode);
-  };
-
-  for (const user of participants) {
-    const flag = getFlagFromParticipant(user);
-    const display = user.id.split('@')[0]; // mostrar lid o número
-    texto += `┊» ${flag} @${display}\n`;
+  if (!(isAdmin || isOwner)) {
+    global.dfail('admin', m, conn);
+    return;
   }
 
-  // Reacción inicial
-  await conn.sendMessage(m.chat, { react: { text: '✅', key: m.key } });
+  const mensaje = args.join` `;
+  const info = mensaje ? `╰➤ ✉️ *Mensaje:* ${mensaje}` : "╰➤ ⚠️ *Invocación general*";
 
-  // Enviar mensaje con menciones
-  await conn.sendMessage(
-    m.chat,
-    { text: texto, mentions: participants.map((p) => p.id) },
-    { quoted: m }
-  );
+  let texto = `
+
+╭══ LLAMADO A TODOS ══⬣
+│  🧃 Total: ${participants.length}
+│  ⚡ Grupo: ${await conn.getName(m.chat)}
+${info}
+╰═══⬣\n`;
+
+  for (const miembro of participants) {
+    const number = miembro.id.split('@')[0];
+    let flag = "🌐";
+    try {
+      const res = await axios.get(`https://g-mini-ia.vercel.app/api/infonumero?numero=${number}`);
+      flag = res.data.bandera || "🌐";
+    } catch (e) {
+      console.log(`❌ Error obteniendo bandera de ${number}:`, e);
+    }
+    texto += `┃ ${flag} @${number}\n`;
+  }
+
+  texto += `╰══⬣\n✨ *Pikachu Bot* ⚔️`;
+
+  conn.sendMessage(m.chat, {
+    text: texto.trim(),
+    mentions: participants.map(p => p.id)
+  }, { quoted: m });
 };
 
-// Configuración del comando
-handler.customPrefix = /^\.?(todos)$/i;
-handler.command = new RegExp();
-handler.group = true;
+handler.help = ['todos <mensaje>'];
+handler.tags = ['grupo'];
+handler.command = ['tagall', 'todos'];
 handler.admin = true;
+handler.group = true;
 
 export default handler;
