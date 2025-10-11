@@ -20,7 +20,7 @@ function cleanTmp(dir, maxAgeMinutes = 10) {
   })
 }
 
-async function downloadToFile(url, filePath, retries = 2) {
+async function downloadToFile(url, filePath, retries = 3) {
   try {
     const res = await axios.get(url, { 
       responseType: "stream",
@@ -52,21 +52,27 @@ async function callSky(url) {
 }
 
 async function callAdonix(url) {
-  const apiUrl = `https://adonixapi.site/api/v1/ytmp3?url=${encodeURIComponent(url)}`
+  // ⚡ Ahora pide calidad 68 kbps
+  const apiUrl = `https://adonixapi.site/api/v1/ytmp3?url=${encodeURIComponent(url)}&quality=68`
   const r = await axios.get(apiUrl, { timeout: 10000 })
   if (!r.data?.success || !r.data?.result?.url)
     throw new Error("API Adonix inválida")
-  return { api: "Adonix", data: { audio: r.data.result.url }, bitrate: 128, audio: r.data.result.url }
+  return { api: "Adonix", data: { audio: r.data.result.url }, bitrate: 68, audio: r.data.result.url }
 }
 
-// 🚀 Primer que responda gana
+// 🚀 Primer que responda gana, con hasta 3 reintentos
 async function fastApi(videoUrl, conn, msg) {
-  try {
-    const winner = await Promise.any([callSky(videoUrl), callAdonix(videoUrl)])
-    await conn.sendMessage(msg.key.remoteJid, { react: { text: "🔁", key: msg.key } })
-    return winner
-  } catch {
-    throw new Error("Todas las APIs fallaron o tardaron demasiado.")
+  let intentos = 0
+  while (intentos < 3) {
+    try {
+      const winner = await Promise.any([callSky(videoUrl), callAdonix(videoUrl)])
+      await conn.sendMessage(msg.key.remoteJid, { react: { text: "🔁", key: msg.key } })
+      return winner
+    } catch (err) {
+      intentos++
+      if (intentos >= 3) throw new Error("Todas las APIs fallaron después de 3 intentos.")
+      await new Promise(r => setTimeout(r, 2000)) // espera 2s entre intentos
+    }
   }
 }
 
@@ -154,7 +160,7 @@ const handler = async (msg, { conn, text }) => {
   // Descarga y envío del audio en segundo plano
   fastApi(videoUrl, conn, msg).then(async result => {
     const mediaUrl = result.audio || result.data?.audio
-    const bitrate = result.bitrate || 64
+    const bitrate = result.bitrate || 68
     if (!mediaUrl) throw new Error("No se obtuvo un enlace válido.")
 
     await downloadAudioFile(conn, msg, mediaUrl, title, bitrate)
